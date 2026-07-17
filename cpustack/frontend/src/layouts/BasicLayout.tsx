@@ -20,6 +20,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 import { ConfigProvider as AntConfigProvider, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import { VERSION } from '../version';
 
 type MenuItem = MenuDataItem & { path: string };
 
@@ -75,6 +76,23 @@ const BasicLayout: React.FC = () => {
     () => ({
       title: 'CPUSTACK',
       logo: '/cpu.svg',
+      headerTitleRender: (logoDom, titleDom) => (
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          {logoDom}
+          {titleDom}
+          <span
+            style={{
+              fontSize: '12px',
+              marginLeft: '8px',
+              opacity: 0.55,
+              fontWeight: 'normal',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            v{VERSION}
+          </span>
+        </div>
+      ),
       layout: 'mix',
       fixedHeader: true,
       fixSiderbar: true,

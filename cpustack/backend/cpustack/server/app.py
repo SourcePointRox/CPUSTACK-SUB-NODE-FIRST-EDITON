@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from cpustack import __version__
 from cpustack.bus import get_event_bus
 from cpustack.config import settings
 from cpustack.db import dispose_engine
@@ -79,7 +80,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="CPUSTACK",
         description="CPU 分布式 AI 模型部署与推理平台",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",

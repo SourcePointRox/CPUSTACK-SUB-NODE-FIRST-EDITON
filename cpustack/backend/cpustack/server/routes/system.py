@@ -279,3 +279,11 @@ async def model_catalog(user: User = Depends(get_current_user)):
             },
         ]
     }
+
+
+@router.get("/version")
+async def version():
+    """返回程序版本号（无需认证，供前端显示）。"""
+    from cpustack import __version__
+
+    return {"version": __version__}
