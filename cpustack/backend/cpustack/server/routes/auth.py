@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import select
@@ -39,6 +41,7 @@ class UserResponse(BaseModel):
 class APIKeyCreate(BaseModel):
     name: str
     allowed_model_names: list[str] | None = None  # 模型白名单，None 表示不限制
+    expires_at: datetime | None = None
 
 
 class APIKeyResponse(BaseModel):
@@ -47,6 +50,8 @@ class APIKeyResponse(BaseModel):
     access_token: str
     enabled: bool
     allowed_model_names: list[str] | None = None
+    expires_at: datetime | None = None
+    created_at: datetime | None = None
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -99,6 +104,7 @@ async def list_api_keys(
             APIKeyResponse(
                 id=k.id, name=k.name, access_token=k.access_token,
                 enabled=k.enabled, allowed_model_names=allowed,
+                expires_at=k.expires_at, created_at=k.created_at,
             )
         )
     return result
@@ -120,6 +126,7 @@ async def create_api_key(
         user_id=user.id,
         enabled=True,
         allowed_model_names=json.dumps(req.allowed_model_names) if req.allowed_model_names else None,
+        expires_at=req.expires_at,
     )
     session.add(api_key)
     await session.commit()
@@ -127,6 +134,7 @@ async def create_api_key(
     return APIKeyResponse(
         id=api_key.id, name=api_key.name, access_token=api_key.access_token,
         enabled=True, allowed_model_names=req.allowed_model_names,
+        expires_at=api_key.expires_at, created_at=api_key.created_at,
     )
 
 

@@ -132,7 +132,7 @@ export interface APIKey {
   name: string;
   access_token: string;
   user_id: number;
-  allowed_model_names?: string | null;
+  allowed_model_names?: string[] | null;
   expires_at?: string | null;
   enabled: boolean;
   created_at?: string;
@@ -141,7 +141,7 @@ export interface APIKey {
 
 export interface APIKeyCreatePayload {
   name: string;
-  allowed_model_names?: string | null;
+  allowed_model_names?: string[] | null;
   expires_at?: string | null;
 }
 

@@ -300,6 +300,16 @@ async def update_instance_state(
     if not is_master and not is_slave:
         raise HTTPException(status_code=403, detail="实例不属于本 Worker")
 
+    # Slave 只能上报 ERROR 状态（rpc-server 启动失败等）。
+    # Slave 的 INITIALIZING/RUNNING 等状态不应覆盖 Master 的生命周期，
+    # 否则 Slave 启动 rpc-server 后报告 RUNNING 会掩盖 Master 仍在下载模型的事实。
+    if is_slave and update.state != ModelInstanceState.ERROR:
+        logger.info(
+            "实例 %s Slave(%s) 上报 %s 状态，忽略（不覆盖 Master 生命周期）",
+            inst.name, worker.name, update.state.value,
+        )
+        return {"status": "ok", "ignored": True}
+
     old_state = inst.state
     inst.state = update.state
     if update.error_message:

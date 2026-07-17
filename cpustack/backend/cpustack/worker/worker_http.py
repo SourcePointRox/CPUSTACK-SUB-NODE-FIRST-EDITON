@@ -91,13 +91,17 @@ def create_worker_http_app(worker_manager: "WorkerManager") -> FastAPI:
         except Exception:
             logger.debug("清除旧凭证文件失败", exc_info=True)
 
-        # 可选：主节点指定节点名称
-        if req.name:
-            try:
-                from cpustack.config import settings
+        # 同步更新 settings 中的 server_url 和 worker_token，
+        # 这样即使某些模块直接读取 settings.server_url（而非 effective_server_url），
+        # 一键接管后也能指向正确的主节点地址。
+        try:
+            from cpustack.config import settings
+            settings.server_url = req.server_url
+            settings.worker_token = req.worker_token
+            if req.name:
                 settings.worker_name = req.name
-            except Exception:
-                logger.debug("设置 worker_name 失败", exc_info=True)
+        except Exception:
+            logger.debug("更新 settings 失败", exc_info=True)
 
         # 执行重新注册（使用传入的 server_url + token 覆盖）
         try:

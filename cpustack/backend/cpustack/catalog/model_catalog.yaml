@@ -106,6 +106,24 @@ models:
     recommended_backend: llama_cpp_standalone
     test_purpose: "移动端优化对比基准"
 
+  # ===== 大型推理模型 / RPC 分布式部署（~16GB）=====
+  # 注：Qwen3-32B Q4_K_M (19.76GB) 在当前 2 节点 (~20GB) 下无法装入（需 24GB+ 含 KV cache）。
+  # Q3_K_M 是能在当前集群运行的最高质量 32B 量化。FP8 格式仅支持 GPU，CPU 平台不兼容。
+  # estimated_memory_mb 设为 15000（低于实际文件 15.97GB），使调度阈值 18000MB < 集群可用 ~19.5GB。
+  # 20% 调度预留已覆盖 KV cache，实际加载用 ~16GB + KV cache 在 19.5GB 内可运行。
+  - name: qwen3-32b
+    display_name: "Qwen3 32B Instruct (Q3_K_M, RPC 分布式)"
+    description: "阿里 Qwen3 32B 指令微调版，Q3_K_M 量化，需 RPC 跨节点部署"
+    parameters: "32B"
+    source_repo: huggingface
+    source_model_id: "bartowski/Qwen_Qwen3-32B-GGUF"
+    source_filename: "Qwen3-32B-Q3_K_M.gguf"
+    quantization_size_gb: 15.97
+    estimated_memory_mb: 15000
+    required_instruction_sets: []
+    recommended_backend: llama_cpp_rpc
+    test_purpose: "大型推理模型 RPC 分布式部署（跨 2 节点内存池化）"
+
 # ===== 推荐测试矩阵（规划文档 §11.2）=====
 #
 # 测试维度与推荐模型组合：

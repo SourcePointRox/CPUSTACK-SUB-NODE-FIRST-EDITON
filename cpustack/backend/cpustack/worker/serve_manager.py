@@ -74,7 +74,7 @@ class ServeManager:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
-                    f"{settings.server_url}/v2/worker/instances/{instance_id}/state",
+                    f"{self._wm.effective_server_url}/v2/worker/instances/{instance_id}/state",
                     json=payload,
                     headers={
                         "X-Worker-UUID": self._wm.worker_uuid,
@@ -748,7 +748,7 @@ class ServeManager:
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(
-                    f"{settings.server_url}/v2/worker/instances",
+                    f"{self._wm.effective_server_url}/v2/worker/instances",
                     headers={
                         "X-Worker-UUID": self._wm.worker_uuid,
                         "X-Worker-Key": self._wm.api_key,

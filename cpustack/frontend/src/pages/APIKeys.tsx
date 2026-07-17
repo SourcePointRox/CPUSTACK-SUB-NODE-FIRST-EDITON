@@ -24,6 +24,13 @@ import { api } from '../services/api';
 import type { APIKey, APIKeyCreatePayload } from '../services/types';
 import StatusTag from '../components/StatusTag';
 
+/** 表单值类型（allowed_model_names 在表单中为逗号分隔字符串，提交时转为数组） */
+interface APIKeyFormValues {
+  name: string;
+  allowed_model_names?: string;
+  expires_at?: string;
+}
+
 const { Text, Paragraph } = Typography;
 
 function maskToken(token: string): string {
@@ -39,7 +46,7 @@ const APIKeys: React.FC = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [createdKey, setCreatedKey] = useState<APIKey | null>(null);
-  const [createForm] = Form.useForm<APIKeyCreatePayload>();
+  const [createForm] = Form.useForm<APIKeyFormValues>();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -59,9 +66,21 @@ const APIKeys: React.FC = () => {
 
   const handleCreate = async () => {
     const values = await createForm.validateFields();
+    // 转换表单值：allowed_model_names 逗号分隔字符串 → string[] | null
+    const rawModels = values.allowed_model_names?.trim();
+    const modelList = rawModels
+      ? rawModels.split(',').map((s) => s.trim()).filter(Boolean)
+      : null;
+    const payload: APIKeyCreatePayload = {
+      name: values.name,
+      allowed_model_names: modelList && modelList.length > 0 ? modelList : null,
+    };
+    if (values.expires_at?.trim()) {
+      payload.expires_at = values.expires_at.trim();
+    }
     setCreateLoading(true);
     try {
-      const created = await api.createAPIKey(values);
+      const created = await api.createAPIKey(payload);
       message.success(`密钥 ${values.name} 已创建`);
       setCreatedKey(created);
       setCreateOpen(false);
@@ -119,8 +138,16 @@ const APIKeys: React.FC = () => {
       title: '模型白名单',
       dataIndex: 'allowed_model_names',
       key: 'allowed_model_names',
-      render: (v?: string | null) =>
-        v ? <Tag>{v}</Tag> : <Text type="secondary">不限制</Text>,
+      render: (v?: string[] | null) =>
+        v && v.length > 0 ? (
+          <Space size={[0, 4]} wrap>
+            {v.map((m) => (
+              <Tag key={m}>{m}</Tag>
+            ))}
+          </Space>
+        ) : (
+          <Text type="secondary">不限制</Text>
+        ),
     },
     {
       title: '状态',
@@ -213,7 +240,7 @@ const APIKeys: React.FC = () => {
         okText="创建"
         cancelText="取消"
       >
-        <Form<APIKeyCreatePayload>
+        <Form<APIKeyFormValues>
           form={createForm}
           layout="vertical"
           initialValues={{ allowed_model_names: '' }}
