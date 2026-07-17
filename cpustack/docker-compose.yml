@@ -1,0 +1,68 @@
+version: "3.9"
+
+services:
+  # 数据库
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cpustack
+      POSTGRES_USER: cpustack
+      POSTGRES_PASSWORD: cpustack_secret
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cpustack"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # CPUSTACK Server（控制平面）
+  cpustack-server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"           # Web UI + API
+    environment:
+      - CPUSTACK_DB_URL=postgresql+asyncpg://cpustack:cpustack_secret@postgres:5432/cpustack
+      - CPUSTACK_DB_URL_SYNC=postgresql+psycopg2://cpustack:cpustack_secret@postgres:5432/cpustack
+      - CPUSTACK_SECRET_KEY=change-this-in-production
+      - CPUSTACK_WORKER_TOKEN=cpustack-cluster-token
+      - CPUSTACK_DEBUG=false
+    volumes:
+      - server-data:/var/lib/cpustack
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # CPUSTACK Worker（数据平面，本机节点）
+  cpustack-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "cpustack.cli", "worker", "--server-url", "http://cpustack-server:80", "--token", "cpustack-cluster-token"]
+    environment:
+      - CPUSTACK_SERVER_URL=http://cpustack-server:80
+      - CPUSTACK_WORKER_TOKEN=cpustack-cluster-token
+      - CPUSTACK_WORKER_NAME=local-worker
+      - CPUSTACK_DEBUG=false
+    volumes:
+      - worker-data:/var/lib/cpustack
+      - model-cache:/var/lib/cpustack/cache
+    depends_on:
+      - cpustack-server
+    deploy:
+      resources:
+        limits:
+          cpus: "8"
+          memory: 16G
+    restart: unless-stopped
+
+volumes:
+  pg-data:
+  server-data:
+  worker-data:
+  model-cache:

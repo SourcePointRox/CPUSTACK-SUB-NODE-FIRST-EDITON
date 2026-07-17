@@ -1,0 +1,132 @@
+# CPUSTACK 预置模型目录（阶段5 测试模型选取）
+#
+# 规划文档 §11.1：全部采用 GGUF Q4_K_M 量化（CPU 推理甜点，95-98% 质量保持）
+# 规划文档 §2.3：Q4_K_M 是 CPU 推理甜点，7B 模型仅 ~4.1GB
+#
+# 字段说明：
+#   name               模型唯一标识（部署时用作 model 名）
+#   display_name       展示名称
+#   description        描述
+#   source_repo        模型仓库（huggingface / modelscope）
+#   source_model_id    仓库内的模型 ID
+#   source_filename    GGUF 文件名
+#   quantization_size  量化后大小（GB）
+#   estimated_memory   估算运行内存（MB，含量化权重 + KV cache + 激活）
+#   required_instruction_sets  指令集要求（空数组表示无要求）
+#   recommended_backend       推荐后端
+#   test_purpose       测试用途
+#   parameters         参数量
+#
+# 镜像源：
+#   - HuggingFace 镜像：hf-mirror.com（config.huggingface_mirror）
+#   - ModelScope（国内）：modelscope.cn
+
+models:
+  # ===== 极速基准（≤1GB）=====
+  - name: llama-3.2-1b
+    display_name: "Llama 3.2 1B Instruct (Q4_K_M)"
+    description: "Meta Llama 3.2 1B 指令微调版，单机极速基准"
+    parameters: "1B"
+    source_repo: huggingface
+    source_model_id: "meta-llama/Llama-3.2-1B-Instruct-GGUF"
+    source_filename: "llama-3.2-1b-instruct-q4_k_m.gguf"
+    quantization_size_gb: 0.9
+    estimated_memory_mb: 1536
+    required_instruction_sets: []
+    recommended_backend: llama_cpp_standalone
+    test_purpose: "单机极速基准（最快 TTFT）"
+
+  # ===== 综合入门 / 分布式验证（~2.5GB）=====
+  - name: llama-3.2-3b
+    display_name: "Llama 3.2 3B Instruct (Q4_K_M)"
+    description: "Meta Llama 3.2 3B 指令微调版，综合入门与分布式验证"
+    parameters: "3B"
+    source_repo: huggingface
+    source_model_id: "meta-llama/Llama-3.2-3B-Instruct-GGUF"
+    source_filename: "llama-3.2-3b-instruct-q4_k_m.gguf"
+    quantization_size_gb: 2.5
+    estimated_memory_mb: 3584
+    required_instruction_sets: []
+    recommended_backend: llama_cpp_standalone
+    test_purpose: "综合入门 / 分布式 RPC 验证"
+
+  # ===== 推理/编程场景（~2.5GB）=====
+  - name: phi-4-mini
+    display_name: "Phi-4 Mini Instruct (Q4_K_M)"
+    description: "微软 Phi-4 Mini 指令微调版，推理与编程场景"
+    parameters: "3.8B"
+    source_repo: huggingface
+    source_model_id: "microsoft/Phi-4-mini-instruct-GGUF"
+    source_filename: "Phi-4-mini-instruct-q4_k_m.gguf"
+    quantization_size_gb: 2.5
+    estimated_memory_mb: 3584
+    required_instruction_sets: []
+    recommended_backend: llama_cpp_standalone
+    test_purpose: "推理/编程场景基准"
+
+  # ===== 多语言（~2.0GB）=====
+  - name: qwen2.5-3b
+    display_name: "Qwen 2.5 3B Instruct (Q4_K_M)"
+    description: "阿里 Qwen 2.5 3B 指令微调版，多语言支持优秀"
+    parameters: "3B"
+    source_repo: modelscope
+    source_model_id: "Qwen/Qwen2.5-3B-Instruct-GGUF"
+    source_filename: "qwen2.5-3b-instruct-q4_k_m.gguf"
+    quantization_size_gb: 2.0
+    estimated_memory_mb: 3072
+    required_instruction_sets: []
+    recommended_backend: llama_cpp_standalone
+    test_purpose: "多语言场景基准"
+
+  # ===== 接近 5GB 上限 / RPC 测试（~4.7GB）=====
+  - name: qwen2.5-7b
+    display_name: "Qwen 2.5 7B Instruct (Q4_K_M)"
+    description: "阿里 Qwen 2.5 7B 指令微调版，接近 5GB 上限，用于 RPC 内存池化测试"
+    parameters: "7B"
+    source_repo: modelscope
+    source_model_id: "Qwen/Qwen2.5-7B-Instruct-GGUF"
+    source_filename: "qwen2.5-7b-instruct-q4_k_m.gguf"
+    quantization_size_gb: 4.7
+    estimated_memory_mb: 5376
+    required_instruction_sets: []
+    recommended_backend: llama_cpp_rpc
+    test_purpose: "接近 5GB 上限 / RPC 内存池化测试"
+
+  # ===== 移动端优化对比（~2.8GB）=====
+  - name: gemma-3-4b
+    display_name: "Gemma 3 4B Instruct (Q4_K_M)"
+    description: "Google Gemma 3 4B 指令微调版，移动端优化对比"
+    parameters: "4B"
+    source_repo: huggingface
+    source_model_id: "google/gemma-3-4b-it-GGUF"
+    source_filename: "gemma-3-4b-it-q4_k_m.gguf"
+    quantization_size_gb: 2.8
+    estimated_memory_mb: 4096
+    required_instruction_sets: []
+    recommended_backend: llama_cpp_standalone
+    test_purpose: "移动端优化对比基准"
+
+# ===== 推荐测试矩阵（规划文档 §11.2）=====
+#
+# 测试维度与推荐模型组合：
+#
+# 1. 单机推理性能（吞吐/TTFT/峰值 RAM）
+#    - llama-3.2-1b    极速基准
+#    - llama-3.2-3b    综合基准
+#    - qwen2.5-7b      接近 5GB 上限
+#
+# 2. 分布式 RPC 性能（2/3 节点内存池化）
+#    - qwen2.5-7b      单机不可装入 → RPC 池化
+#
+# 3. 流水线并行性能（prima.cpp 多节点加速比）
+#    - llama-3.2-3b    2 节点流水线
+#    - qwen2.5-3b      2 节点流水线
+#
+# 4. 数据并行性能（多副本并发吞吐线性扩展）
+#    - llama-3.2-3b    3 副本数据并行
+#
+# 5. 算法优化对比（阶段5 §11.3）
+#    - llama-3.2-3b    cont_batching=true vs false
+#    - llama-3.2-3b    flash_attn=true vs false
+#    - llama-3.2-3b    draft_model=llama-3.2-1b（投机解码）
+#    - llama-3.2-3b    cache_reuse=256（前缀缓存）

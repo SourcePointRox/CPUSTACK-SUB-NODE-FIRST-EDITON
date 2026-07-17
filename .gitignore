@@ -1,0 +1,71 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+wheels/
+*.whl
+
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# ===== 环境变量与密钥（不上传）=====
+.env
+.env.local
+.env.*.local
+*.secret
+credentials.json
+
+# ===== CPUSTACK 运行时数据（不上传，但保留前端构建产物 ui/）=====
+# 数据库文件
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+# 模型文件（体积大，按需本地下载）
+*.gguf
+*.bin
+# 运行数据目录内容（排除 cache/kb/凭证，保留 ui/ 前端构建产物）
+cpustack/backend/data/cache/
+cpustack/backend/data/kb/
+cpustack/backend/data/worker_credentials.json
+# Worker 凭证
+worker_credentials.json
+
+# ===== 前端 =====
+node_modules/
+frontend/dist/
+cpustack/frontend/dist/
+*.tsbuildinfo
+
+# ===== 测试与缓存 =====
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+test_app.db
+
+# ===== IDE / 编辑器 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== Docker =====
+.docker/
