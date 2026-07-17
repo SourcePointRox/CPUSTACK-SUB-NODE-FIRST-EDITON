@@ -38,6 +38,24 @@ class ServeManager:
         self._watch_task: asyncio.Task | None = None
         # 软文件锁：按 model_id:filename 去重，防止同 Worker 多实例并发下载同一模型
         self._download_locks: dict[str, asyncio.Lock] = {}
+        # 实例日志缓冲（每实例最近 500 行）
+        self._instance_logs: dict[int, list[str]] = {}
+        self._MAX_LOG_LINES = 500
+
+    def _add_log(self, instance_id: int, message: str) -> None:
+        """追加实例日志行到内存缓冲。"""
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {message}"
+        logs = self._instance_logs.setdefault(instance_id, [])
+        logs.append(line)
+        if len(logs) > self._MAX_LOG_LINES:
+            del logs[: len(logs) - self._MAX_LOG_LINES]
+        logger.info("[实例 %d] %s", instance_id, message)
+
+    def get_instance_logs(self, instance_id: int) -> list[str]:
+        """获取实例日志。"""
+        return list(self._instance_logs.get(instance_id, []))
 
     def allocate_port(self) -> int:
         """从服务端口范围分配一个端口。"""
@@ -380,10 +398,12 @@ class ServeManager:
             return
 
         self._handling.add(instance_id)
+        self._add_log(instance_id, f"启动 RPC Master: 实例 {inst['name']} (模型: {inst['source_model_id']})")
         logger.info("启动 RPC Master: 实例 %s (模型: %s)", inst["name"], inst["source_model_id"])
 
         try:
             # 1. INITIALIZING
+            self._add_log(instance_id, "状态变更为 INITIALIZING")
             await self._report_state(instance_id, ModelInstanceState.INITIALIZING)
 
             # 2. 下载模型文件
@@ -392,8 +412,9 @@ class ServeManager:
             cached = get_cached_model_path(inst["source_model_id"], inst["source_filename"])
             if cached:
                 model_path = cached
-                logger.info("模型文件已缓存: %s", model_path)
+                self._add_log(instance_id, f"模型文件已缓存: {model_path}")
             else:
+                self._add_log(instance_id, f"开始下载模型: {inst['source_repo']}/{inst['source_model_id']}/{inst['source_filename']}")
                 await self._report_state(instance_id, ModelInstanceState.DOWNLOADING)
 
                 def on_progress(p: float) -> None:
@@ -413,20 +434,23 @@ class ServeManager:
                 )
 
                 if not model_path:
+                    self._add_log(instance_id, "模型文件下载失败")
                     await self._report_state(
                         instance_id,
                         ModelInstanceState.ERROR,
                         error_message="模型文件下载失败",
                     )
                     return
+                self._add_log(instance_id, f"模型下载完成: {model_path}")
 
             # 3. STARTING
+            self._add_log(instance_id, "状态变更为 STARTING")
             await self._report_state(instance_id, ModelInstanceState.STARTING)
 
             # 4. 等待 Slave 就绪（固定等待 + 轮询）
             rpc_slaves = inst.get("rpc_slaves", [])
             if rpc_slaves:
-                logger.info("等待 %d 个 RPC Slave 就绪...", len(rpc_slaves))
+                self._add_log(instance_id, f"等待 {len(rpc_slaves)} 个 RPC Slave 就绪...")
                 await self._wait_for_slaves(rpc_slaves, timeout=60)
 
             # 5. 构建 RPC peers 列表
@@ -442,6 +466,7 @@ class ServeManager:
             )
 
             port = self.allocate_port()
+            self._add_log(instance_id, f"分配推理端口: {port}, RPC peers: {rpc_peers}")
             from cpustack.worker.backends.base import get_backend
             from cpustack.schemas.models import ModelBackend
 
@@ -450,6 +475,7 @@ class ServeManager:
             backend = get_backend(instance_obj)
 
             # RPC 后端的 start 方法接受 rpc_peers 参数
+            self._add_log(instance_id, "正在启动 llama-server (RPC Master 模式)...")
             process = await backend.start(
                 model_path, port,
                 rpc_peers=rpc_peers,
@@ -458,6 +484,7 @@ class ServeManager:
 
             if not process:
                 self.release_port(port)
+                self._add_log(instance_id, "推理后端启动失败")
                 await self._report_state(
                     instance_id,
                     ModelInstanceState.ERROR,
@@ -466,10 +493,12 @@ class ServeManager:
                 return
 
             # 7. 等待健康检查
+            self._add_log(instance_id, f"等待健康检查 (端口 {port}, 超时 90s)...")
             healthy = await self._wait_for_health(port, timeout=90)
             if not healthy:
                 process.terminate()
                 self.release_port(port)
+                self._add_log(instance_id, "推理后端健康检查超时")
                 await self._report_state(
                     instance_id,
                     ModelInstanceState.ERROR,
@@ -480,6 +509,7 @@ class ServeManager:
             # 8. RUNNING
             self._processes[instance_id] = process
             self._ports[instance_id] = port
+            self._add_log(instance_id, f"实例已就绪! 端口 {port}, {len(rpc_peers)} Slaves")
             await self._report_state(
                 instance_id,
                 ModelInstanceState.RUNNING,
@@ -490,7 +520,8 @@ class ServeManager:
                 inst["name"], port, len(rpc_peers),
             )
 
-        except Exception:
+        except Exception as e:
+            self._add_log(instance_id, f"RPC Master 处理异常: {e}")
             logger.exception("RPC Master 处理异常: %s", inst["name"])
             await self._report_state(
                 instance_id,

@@ -172,7 +172,9 @@ export const api = {
     return request.post(`/v2/models/instances/${id}/restart`, {});
   },
   getInstanceLogs(id: number): Promise<string> {
-    return request.get(`/v2/models/instances/${id}/logs`);
+    return request.get(`/v2/models/instances/${id}/logs`).then(
+      (res: any) => (typeof res === 'string' ? res : res?.logs ?? JSON.stringify(res, null, 2)),
+    );
   },
   deleteInstance(id: number): Promise<void> {
     return request.delete(`/v2/models/instances/${id}`);

@@ -104,6 +104,9 @@ def both(host: str | None, port: int | None, debug: bool) -> None:
         await asyncio.sleep(2)
         settings.server_url = f"http://127.0.0.1:{settings.port}"
         worker = Worker()
+        # 将 Worker 实例存储到 app.state，供 Server 路由访问 ServeManager（如日志端点）
+        from cpustack.server.app import app
+        app.state.worker = worker
         worker_task = asyncio.create_task(worker.start())
 
         await asyncio.gather(server_task, worker_task)

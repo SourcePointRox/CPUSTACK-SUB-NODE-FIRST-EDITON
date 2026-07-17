@@ -268,3 +268,52 @@ async def stop_instance(
     await session.commit()
     await ModelInstance.publish_updated(inst.id, {"state": "error"})
     return {"message": "实例已停止"}
+
+
+@router.get("/instances/{instance_id}/logs")
+async def get_instance_logs(
+    instance_id: int,
+    user: User = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """获取实例日志。
+
+    日志来源：
+    1. 本节点 ServeManager 的内存日志缓冲（both 模式下可直接访问）
+    2. 数据库中的 error_message 和状态信息
+    """
+    inst = await session.get(ModelInstance, instance_id)
+    if not inst:
+        raise HTTPException(status_code=404, detail="实例不存在")
+
+    logs: list[str] = []
+
+    # 1. 尝试从 app.state.worker.serve_manager 获取内存日志
+    from fastapi import Request
+    # 通过模块级 app 引用获取
+    try:
+        from cpustack.server.app import app
+        worker = getattr(app.state, "worker", None)
+        if worker and hasattr(worker, "serve_manager"):
+            serve_logs = worker.serve_manager.get_instance_logs(instance_id)
+            logs.extend(serve_logs)
+    except Exception:
+        pass
+
+    # 2. 追加数据库中的状态信息
+    if not logs:
+        logs.append(f"实例 {inst.name} (ID: {inst.id})")
+        logs.append(f"当前状态: {inst.state}")
+        if inst.error_message:
+            logs.append(f"错误信息: {inst.error_message}")
+        if inst.download_progress > 0:
+            logs.append(f"下载进度: {inst.download_progress * 100:.1f}%")
+        if inst.service_port:
+            logs.append(f"服务端口: {inst.service_port}")
+        if not inst.error_message and inst.state == ModelInstanceState.SCHEDULED:
+            logs.append("提示: 实例处于 SCHEDULED 状态，等待分配的 Worker 拉取处理。")
+            logs.append("可能原因: Worker 不在线、网络不通、或 Worker 代码版本过旧。")
+        elif not logs:
+            logs.append("暂无日志")
+
+    return {"logs": "\n".join(logs)}
