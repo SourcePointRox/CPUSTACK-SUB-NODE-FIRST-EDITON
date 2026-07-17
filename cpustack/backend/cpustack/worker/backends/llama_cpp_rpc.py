@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from cpustack.worker.backends.base import InferenceServer, find_binary
+from cpustack.worker.backends.base import InferenceServer, ensure_ascii_path, find_binary
 from cpustack.worker.backends.params import build_common_args, parse_backend_parameters
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,9 @@ class LlamaCppRPCServer(InferenceServer):
         if not binary:
             logger.error("未找到 llama-server 二进制")
             return None
+
+        # Windows 上 llama.cpp 不支持非 ASCII 路径，自动创建 junction 规避
+        model_file_path = ensure_ascii_path(model_file_path)
 
         params = backend_parameters
         if params is None:

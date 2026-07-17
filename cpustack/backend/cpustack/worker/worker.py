@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from cpustack.config import settings
 from cpustack.worker.discovery_listener import DiscoveryListener
@@ -20,6 +21,57 @@ from cpustack.worker.worker_http import start_worker_http
 from cpustack.worker.worker_manager import WorkerManager
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_firewall_rules(worker_id: int) -> None:
+    """Windows 上自动添加防火墙规则，允许 RPC 端口和内部 HTTP 端口入站。
+
+    RPC 端口约定：50000 + worker_id
+    内部 HTTP 端口：settings.worker_port (默认 30080)
+
+    需要管理员权限；非管理员时静默跳过（记录警告）。
+    """
+    if sys.platform != "win32":
+        return
+
+    import subprocess
+
+    ports = [
+        (50000 + worker_id, f"CPUSTACK RPC Worker {worker_id}"),
+        (settings.worker_port, "CPUSTACK Worker HTTP"),
+    ]
+
+    for port, rule_name in ports:
+        try:
+            # 检查规则是否已存在
+            check = subprocess.run(
+                ["netsh", "advfirewall", "firewall", "show", "rule", f"name={rule_name}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if check.returncode == 0 and rule_name in check.stdout:
+                logger.info("防火墙规则已存在: %s (端口 %d)", rule_name, port)
+                continue
+
+            # 添加入站规则
+            result = subprocess.run(
+                [
+                    "netsh", "advfirewall", "firewall", "add", "rule",
+                    f"name={rule_name}",
+                    "dir=in", "action=allow", "protocol=TCP",
+                    f"localport={port}",
+                ],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                logger.info("已添加防火墙规则: %s (端口 %d)", rule_name, port)
+            else:
+                logger.warning(
+                    "添加防火墙规则失败: %s (端口 %d) — %s。"
+                    "请以管理员身份运行或手动添加规则。",
+                    rule_name, port, result.stderr.strip(),
+                )
+        except Exception as e:
+            logger.warning("配置防火墙异常: %s (端口 %d) — %s", rule_name, port, e)
 
 
 class Worker:
@@ -60,6 +112,10 @@ class Worker:
 
         # 2. 立即上报一次状态
         await self.worker_manager.sync_status()
+
+        # 2.5 配置防火墙规则（Windows 上允许 RPC 端口入站）
+        if self.worker_manager.worker_id is not None:
+            _ensure_firewall_rules(self.worker_manager.worker_id)
 
         # 3. 启动心跳
         await self.worker_manager.start_heartbeat(interval=15)

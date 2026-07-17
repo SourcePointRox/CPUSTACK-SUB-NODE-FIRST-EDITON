@@ -409,6 +409,68 @@ def create_worker_http_app(worker_manager: "WorkerManager") -> FastAPI:
             "worker_id": worker_manager.worker_id,
         }
 
+    @app.get("/internal/diagnose")
+    async def diagnose() -> dict:
+        """诊断端点：检查本节点推理二进制可用性、RPC 端口、防火墙状态。
+
+        供主节点远程诊断 Slave 节点问题（rpc-server 未安装、端口未开放等）。
+        """
+        import shutil
+        import sys
+
+        from cpustack.worker.backends.base import find_binary
+
+        # 检查关键二进制
+        binaries = {}
+        for name in ["rpc-server", "llama-server", "prima-server"]:
+            path = find_binary(name)
+            binaries[name] = path
+
+        # RPC 端口
+        worker_id = worker_manager.worker_id or 0
+        rpc_port = 50000 + worker_id
+
+        # 检查 RPC 端口是否在监听
+        rpc_port_listening = False
+        if sys.platform == "win32":
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["netstat", "-an"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                rpc_port_listening = f":{rpc_port}" in result.stdout and "LISTEN" in result.stdout
+            except Exception:
+                pass
+
+        # 检查防火墙规则
+        firewall_rules = []
+        if sys.platform == "win32":
+            try:
+                import subprocess
+                for port in [rpc_port, settings.worker_port]:
+                    result = subprocess.run(
+                        ["netsh", "advfirewall", "firewall", "show", "rule",
+                         f"name=CPUSTACK RPC Worker {worker_id}"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    firewall_rules.append({
+                        "port": port,
+                        "rule_exists": result.returncode == 0,
+                    })
+            except Exception:
+                pass
+
+        return {
+            "worker_id": worker_id,
+            "worker_uuid": worker_manager.worker_uuid,
+            "rpc_port": rpc_port,
+            "rpc_port_listening": rpc_port_listening,
+            "binaries": binaries,
+            "firewall_rules": firewall_rules,
+            "platform": sys.platform,
+        }
+
     @app.post("/internal/register", response_model=RegisterTriggerResponse)
     async def trigger_register(req: RegisterTriggerRequest) -> RegisterTriggerResponse:
         """主节点一键接管注册：推送新的 server_url + token，触发本节点重新注册。

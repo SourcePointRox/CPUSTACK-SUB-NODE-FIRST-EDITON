@@ -146,13 +146,18 @@ class ServeManager:
             # 3. 实际下载
             await self._report_state(instance_id, ModelInstanceState.DOWNLOADING)
 
+            # on_progress 在 executor 线程中调用，必须用 run_coroutine_threadsafe
+            # 而非 ensure_future（executor 线程无事件循环）
+            loop = asyncio.get_running_loop()
+
             def on_progress(p: float) -> None:
-                asyncio.ensure_future(
+                asyncio.run_coroutine_threadsafe(
                     self._report_state(
                         instance_id,
                         ModelInstanceState.DOWNLOADING,
                         download_progress=p,
-                    )
+                    ),
+                    loop,
                 )
 
             model_path = await download_model_file(
@@ -170,20 +175,25 @@ class ServeManager:
         if instance_id in self._rpc_processes:
             return  # 已在运行
 
+        self._add_log(instance_id, f"启动 RPC Slave: 实例 {inst['name']}")
         logger.info("启动 RPC Slave: 实例 %s", inst["name"])
 
         try:
+            self._add_log(instance_id, "状态变更为 INITIALIZING")
             await self._report_state(instance_id, ModelInstanceState.INITIALIZING)
 
             # RPC 端口约定：50000 + worker_id
             # worker_id 需要从 WorkerManager 获取
             worker_id = self._wm.worker_id or 0
             rpc_port = 50000 + worker_id
+            self._add_log(instance_id, f"RPC Slave 端口: {rpc_port} (worker_id={worker_id})")
 
             from cpustack.worker.backends.llama_cpp_rpc import start_rpc_server
 
+            self._add_log(instance_id, "正在启动 rpc-server...")
             process = await start_rpc_server(rpc_port)
             if not process:
+                self._add_log(instance_id, "rpc-server 启动失败（未找到二进制或启动异常）")
                 await self._report_state(
                     instance_id,
                     ModelInstanceState.ERROR,
@@ -194,7 +204,21 @@ class ServeManager:
             # 等待 rpc-server 启动
             await asyncio.sleep(2)
 
+            # 检查进程是否仍在运行
+            if process.returncode is not None:
+                stdout = await process.stdout.read() if process.stdout else b""
+                stderr = await process.stderr.read() if process.stderr else b""
+                err_text = stderr.decode("utf-8", errors="replace")[:500]
+                self._add_log(instance_id, f"rpc-server 进程已退出 (code={process.returncode}): {err_text}")
+                await self._report_state(
+                    instance_id,
+                    ModelInstanceState.ERROR,
+                    error_message=f"rpc-server 启动后立即退出: {err_text}",
+                )
+                return
+
             self._rpc_processes[instance_id] = process
+            self._add_log(instance_id, f"RPC Slave 就绪 (端口 {rpc_port})")
             await self._report_state(
                 instance_id,
                 ModelInstanceState.RUNNING,
@@ -402,11 +426,20 @@ class ServeManager:
         logger.info("启动 RPC Master: 实例 %s (模型: %s)", inst["name"], inst["source_model_id"])
 
         try:
-            # 1. INITIALIZING
+            # 1. 等待 Slave 就绪（保持 SCHEDULED 状态，让 Slave Worker 能处理实例启动 rpc-server）
+            # 注意：必须先等待 Slave，否则 Master 改状态后 Slave Worker（旧代码）无法处理非 SCHEDULED 实例
+            rpc_slaves = inst.get("rpc_slaves", [])
+            ready_slaves = []
+            if rpc_slaves:
+                self._add_log(instance_id, f"等待 {len(rpc_slaves)} 个 RPC Slave 就绪（保持 SCHEDULED 状态）...")
+                ready_slaves = await self._wait_for_slaves(rpc_slaves, timeout=90)
+                self._add_log(instance_id, f"RPC Slave 就绪: {len(ready_slaves)}/{len(rpc_slaves)}")
+
+            # 2. INITIALIZING
             self._add_log(instance_id, "状态变更为 INITIALIZING")
             await self._report_state(instance_id, ModelInstanceState.INITIALIZING)
 
-            # 2. 下载模型文件
+            # 3. 下载模型文件
             from cpustack.worker.downloader import download_model_file, get_cached_model_path
 
             cached = get_cached_model_path(inst["source_model_id"], inst["source_filename"])
@@ -417,13 +450,17 @@ class ServeManager:
                 self._add_log(instance_id, f"开始下载模型: {inst['source_repo']}/{inst['source_model_id']}/{inst['source_filename']}")
                 await self._report_state(instance_id, ModelInstanceState.DOWNLOADING)
 
+                # on_progress 在 executor 线程中调用，必须用 run_coroutine_threadsafe
+                loop = asyncio.get_running_loop()
+
                 def on_progress(p: float) -> None:
-                    asyncio.ensure_future(
+                    asyncio.run_coroutine_threadsafe(
                         self._report_state(
                             instance_id,
                             ModelInstanceState.DOWNLOADING,
                             download_progress=p,
-                        )
+                        ),
+                        loop,
                     )
 
                 model_path = await download_model_file(
@@ -443,18 +480,14 @@ class ServeManager:
                     return
                 self._add_log(instance_id, f"模型下载完成: {model_path}")
 
-            # 3. STARTING
+            # 4. STARTING
             self._add_log(instance_id, "状态变更为 STARTING")
             await self._report_state(instance_id, ModelInstanceState.STARTING)
 
-            # 4. 等待 Slave 就绪（固定等待 + 轮询）
-            rpc_slaves = inst.get("rpc_slaves", [])
-            if rpc_slaves:
-                self._add_log(instance_id, f"等待 {len(rpc_slaves)} 个 RPC Slave 就绪...")
-                await self._wait_for_slaves(rpc_slaves, timeout=60)
-
-            # 5. 构建 RPC peers 列表
-            rpc_peers = [f"{s['ip']}:{s['rpc_port']}" for s in rpc_slaves if s.get("rpc_port")]
+            # 5. 构建 RPC peers 列表（仅包含已就绪的 Slave）
+            rpc_peers = [f"{s['ip']}:{s['rpc_port']}" for s in ready_slaves if s.get("rpc_port")]
+            if not rpc_peers and rpc_slaves:
+                self._add_log(instance_id, "无 RPC Slave 就绪，尝试单机模式启动")
 
             # 6. 启动 llama-server（RPC Master 模式）
             instance_obj = ModelInstance(
@@ -467,12 +500,11 @@ class ServeManager:
 
             port = self.allocate_port()
             self._add_log(instance_id, f"分配推理端口: {port}, RPC peers: {rpc_peers}")
-            from cpustack.worker.backends.base import get_backend
-            from cpustack.schemas.models import ModelBackend
+            from cpustack.worker.backends.llama_cpp_rpc import LlamaCppRPCServer
 
-            # 强制使用 RPC 后端
-            instance_obj.backend = ModelBackend.LLAMA_CPP_RPC
-            backend = get_backend(instance_obj)
+            # ModelInstance 表无 backend 字段（backend 属于 Model 表），
+            # 直接实例化 RPC 后端，与 _handle_prima_master_instance 做法一致
+            backend = LlamaCppRPCServer(instance_obj)
 
             # RPC 后端的 start 方法接受 rpc_peers 参数
             self._add_log(instance_id, "正在启动 llama-server (RPC Master 模式)...")
@@ -492,17 +524,24 @@ class ServeManager:
                 )
                 return
 
-            # 7. 等待健康检查
-            self._add_log(instance_id, f"等待健康检查 (端口 {port}, 超时 90s)...")
-            healthy = await self._wait_for_health(port, timeout=90)
+            # 7. 等待健康检查（大模型加载需要较长时间，超时 600s）
+            self._add_log(instance_id, f"等待健康检查 (端口 {port}, 超时 600s)...")
+            healthy = await self._wait_for_health(port, timeout=600, process=process)
             if not healthy:
-                process.terminate()
+                # 读取 llama-server 输出用于诊断
+                stdout = await process.stdout.read() if process.stdout else b""
+                stderr = await process.stderr.read() if process.stderr else b""
+                err_text = stderr.decode("utf-8", errors="replace")[:1000]
+                out_text = stdout.decode("utf-8", errors="replace")[:500]
+                if process.returncode is None:
+                    process.terminate()
                 self.release_port(port)
-                self._add_log(instance_id, "推理后端健康检查超时")
+                diag = f"exit={process.returncode}, stderr={err_text}, stdout={out_text}"
+                self._add_log(instance_id, f"推理后端健康检查失败: {diag}")
                 await self._report_state(
                     instance_id,
                     ModelInstanceState.ERROR,
-                    error_message="推理后端健康检查超时",
+                    error_message=f"推理后端健康检查失败: {diag}",
                 )
                 return
 
@@ -531,25 +570,81 @@ class ServeManager:
         finally:
             self._handling.discard(instance_id)
 
-    async def _wait_for_slaves(self, slaves: list[dict], timeout: int = 60) -> None:
-        """等待 RPC Slave 节点就绪（简单轮询 TCP 连接）。"""
+    async def _wait_for_slaves(self, slaves: list[dict], timeout: int = 60) -> list[dict]:
+        """等待 RPC Slave 节点就绪（简单轮询 TCP 连接）。
+
+        返回已就绪的 Slave 列表。
+        超时后对未就绪的 Slave 查询诊断端点，记录具体原因。
+        """
         import time
 
         deadline = time.time() + timeout
-        targets = [(s["ip"], s["rpc_port"]) for s in slaves if s.get("rpc_port")]
+        all_targets = {f"{s['ip']}:{s['rpc_port']}": s for s in slaves if s.get("rpc_port")}
+        pending = set(all_targets.keys())
+        ready: list[dict] = []
 
-        while time.time() < deadline and targets:
-            ready = []
-            for ip, port in targets:
-                if await self._check_tcp(ip, port):
-                    logger.info("RPC Slave %s:%d 已就绪", ip, port)
-                    ready.append((ip, port))
-            targets = [t for t in targets if t not in ready]
-            if targets:
+        while time.time() < deadline and pending:
+            newly_ready = []
+            for key in list(pending):
+                ip, port = key.split(":")
+                if await self._check_tcp(ip, int(port)):
+                    logger.info("RPC Slave %s 已就绪", key)
+                    newly_ready.append(key)
+            for key in newly_ready:
+                ready.append(all_targets[key])
+                pending.discard(key)
+            if pending:
                 await asyncio.sleep(3)
 
-        if targets:
-            logger.warning("部分 RPC Slave 未就绪: %s", targets)
+        if pending:
+            logger.warning("部分 RPC Slave 未就绪: %s", list(pending))
+            # 查询诊断端点，获取具体原因
+            for key in list(pending):
+                ip = key.split(":")[0]
+                diag = await self._diagnose_slave(ip)
+                if diag:
+                    slave_info = all_targets.get(key, {})
+                    slave_name = slave_info.get("worker_name", ip)
+                    rpc_port = diag.get("rpc_port", "?")
+                    binaries = diag.get("binaries", {})
+                    rpc_binary = binaries.get("rpc-server")
+                    port_listening = diag.get("rpc_port_listening", False)
+                    firewall = diag.get("firewall_rules", [])
+
+                    if not rpc_binary:
+                        self._add_log(
+                            0,
+                            f"Slave {slave_name}({ip}) 诊断: rpc-server 未安装"
+                            f"（rpc_port={rpc_port}, 二进制路径=None）",
+                        )
+                    elif not port_listening:
+                        self._add_log(
+                            0,
+                            f"Slave {slave_name}({ip}) 诊断: rpc-server 已安装"
+                            f"({rpc_binary}) 但端口 {rpc_port} 未监听"
+                            f"— 请检查 Slave 日志",
+                        )
+                    else:
+                        fw_ok = any(r.get("rule_exists") for r in firewall)
+                        self._add_log(
+                            0,
+                            f"Slave {slave_name}({ip}) 诊断: rpc-server 运行中"
+                            f"(端口 {rpc_port}) 但 Master 无法连接"
+                            f"— 防火墙规则={'存在' if fw_ok else '缺失'}",
+                        )
+
+        return ready
+
+    async def _diagnose_slave(self, ip: str) -> dict | None:
+        """查询 Slave 节点的诊断端点。"""
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(f"http://{ip}:30080/internal/diagnose")
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            pass
+        return None
 
     async def _check_tcp(self, host: str, port: int) -> bool:
         """检查 TCP 端口是否可连接。"""
@@ -577,7 +672,9 @@ class ServeManager:
             return
 
         # 仅处理 SCHEDULED 状态
-        if state != "scheduled":
+        # Slave 角色：实例可能已被 Master 改为 INITIALIZING/STARTING，
+        # 但 Slave 仍需启动 rpc-server（_handle_slave_instance 内部有重复启动防护）
+        if state != "scheduled" and rpc_role != "slave":
             return
 
         # RPC 角色分支（llama_cpp_rpc）
@@ -701,14 +798,26 @@ class ServeManager:
         finally:
             self._handling.discard(instance_id)
 
-    async def _wait_for_health(self, port: int, timeout: int = 60) -> bool:
-        """等待推理后端健康检查通过。"""
+    async def _wait_for_health(self, port: int, timeout: int = 60, process=None) -> bool:
+        """等待推理后端健康检查通过。
+
+        Args:
+            port: 健康检查端口
+            timeout: 超时秒数
+            process: 可选的子进程对象，若进程退出则提前返回 False
+        """
         import time
 
         url = f"http://127.0.0.1:{port}/health"
         deadline = time.time() + timeout
 
         while time.time() < deadline:
+            # 进程已退出则无需继续等待
+            if process is not None and process.returncode is not None:
+                logger.warning(
+                    "推理进程已退出 (code=%s)，停止健康检查", process.returncode
+                )
+                return False
             try:
                 async with httpx.AsyncClient(timeout=3) as client:
                     resp = await client.get(url)
@@ -817,7 +926,11 @@ class ServeManager:
                 continue
 
             # SCHEDULED 实例：启动处理
-            if state == "scheduled":
+            # Slave 角色：实例可能已被 Master 改为 INITIALIZING/STARTING，
+            # 但 Slave 仍需启动 rpc-server，故对所有 active 状态处理
+            if state == "scheduled" or (
+                rpc_role == "slave" and state in ("initializing", "downloading", "starting")
+            ):
                 await self._handle_instance(inst)
 
         # 清理已不在分配列表中的实例

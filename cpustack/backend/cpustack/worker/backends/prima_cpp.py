@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from cpustack.worker.backends.base import InferenceServer, find_binary
+from cpustack.worker.backends.base import InferenceServer, ensure_ascii_path, find_binary
 from cpustack.worker.backends.params import build_common_args, parse_backend_parameters
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,8 @@ async def start_prima_worker(
         "--master", master_addr,
     ]
     if model_file_path:
+        # Windows 上 llama.cpp 不支持非 ASCII 路径，自动创建 junction 规避
+        model_file_path = ensure_ascii_path(model_file_path)
         cmd.extend(["--model", model_file_path])
 
     logger.info(
@@ -122,6 +124,9 @@ class PrimaCppServer(InferenceServer):
         if not binary:
             logger.error("未找到 prima-server 二进制")
             return None
+
+        # Windows 上 llama.cpp 不支持非 ASCII 路径，自动创建 junction 规避
+        model_file_path = ensure_ascii_path(model_file_path)
 
         # 计算本 Master 节点负责的层段（第一段）
         # 层分配由调度器计算并传入，Master 总是 rank 0 处理第一段

@@ -310,6 +310,23 @@ async def update_instance_state(
         )
         return {"status": "ok", "ignored": True}
 
+    # Slave 上报 ERROR 时，不覆盖 Master 的活跃状态。
+    # Master 会通过 _wait_for_slaves 发现 Slave 未就绪，自行决定是否报错。
+    # 仅当实例已处于 ERROR 状态时追加错误信息。
+    if is_slave and update.state == ModelInstanceState.ERROR:
+        active_states = {
+            ModelInstanceState.SCHEDULED,
+            ModelInstanceState.INITIALIZING,
+            ModelInstanceState.DOWNLOADING,
+            ModelInstanceState.STARTING,
+        }
+        if inst.state in active_states:
+            logger.warning(
+                "实例 %s Slave(%s) 上报 ERROR: %s，但 Master 处于 %s 活跃状态，不覆盖",
+                inst.name, worker.name, update.error_message, inst.state.value,
+            )
+            return {"status": "ok", "ignored": True}
+
     old_state = inst.state
     inst.state = update.state
     if update.error_message:
