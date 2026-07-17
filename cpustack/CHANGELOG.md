@@ -4,6 +4,47 @@
 
 ---
 
+## v1.1.0 (2026-07-17)
+
+### 新增
+
+- 新增：主节点仪表盘 UI 美化（渐变 Hero 横幅、彩色图标卡片、渐变面积折线图、30 秒自动刷新）
+- 新增：登录页视觉升级（浮动光斑动画、渐变 Logo、圆角按钮）
+- 新增：全局样式系统（页面标题渐变文字、卡片悬停动画、暗色模式适配）
+- 新增：整体性能测试脚本与基准报告
+
+### 修复
+
+- 修复：`model_instances.state` 字段大小写不一致导致 `/v2/models/instances` 接口 500 错误（数据库存储小写枚举值 `scheduled`，SQLAlchemy 期望大写枚举名 `SCHEDULED`）
+
+### 优化
+
+- 优化：Dashboard 统计卡片改为彩色渐变图标 + 悬停浮起效果
+- 优化：ECharts 折线图改为渐变面积填充 + 隐藏数据点标记 + 虚线网格
+- 优化：ProLayout 主题令牌（圆角 8px、主色 #1668dc）
+- 优化：暗色模式下的卡片、标题、统计值颜色适配
+
+### 性能测试结果（v1.1.0）
+
+| 测试项 | 平均延迟 | P50 | P95 | 评价 |
+|--------|---------|-----|-----|------|
+| GET /healthz | 4.8 ms | 3.2 ms | 19.9 ms | 优秀 |
+| GET /v2/version | 2.6 ms | - | - | 优秀 |
+| GET /v2/models | 14.7 ms | - | - | 优秀 |
+| GET /v2/models/instances | 9.7 ms | - | - | 优秀 |
+| GET /v2/models/catalog | 9.3 ms | - | - | 优秀 |
+| GET /v2/workers | 16.1 ms | 15.5 ms | 26.9 ms | 优秀 |
+| GET /v2/dashboard | 31.4 ms | 21.0 ms | 88.9 ms | 良好 |
+| GET /v2/auth/api-keys | 10.8 ms | - | - | 优秀 |
+| GET /v2/tokens/summary | 11.0 ms | - | - | 优秀 |
+| GET /v2/knowledge-bases | 19.2 ms | - | - | 优秀 |
+| POST /v2/auth/login | 73-106 ms | - | - | 良好（bcrypt） |
+| 并发登录（4线程×12） | ~13-17 s | - | - | 受限（SQLite 单写 + bcrypt） |
+
+> **结论**：管理 API 单请求延迟 10-30ms，性能优秀。并发登录受 SQLite 单写锁与 bcrypt 哈希（~100ms/次）限制，生产环境建议改用 PostgreSQL。
+
+---
+
 ## v1.0.0 (2026-07-17)
 
 首次正式版本发布。

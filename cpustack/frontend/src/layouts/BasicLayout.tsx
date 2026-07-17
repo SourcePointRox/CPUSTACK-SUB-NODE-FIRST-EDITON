@@ -137,12 +137,17 @@ const BasicLayout: React.FC = () => {
       locale={zhCN}
       theme={{
         algorithm: darkMode ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-        token: { colorPrimary: '#1668dc' },
+        token: {
+          colorPrimary: '#1668dc',
+          borderRadius: 8,
+        },
       }}
     >
-      <ProLayout {...layoutProps}>
-        <Outlet />
-      </ProLayout>
+      <div data-theme={darkMode ? 'dark' : 'light'} style={{ minHeight: '100%' }}>
+        <ProLayout {...layoutProps}>
+          <Outlet />
+        </ProLayout>
+      </div>
     </AntConfigProvider>
   );
 };

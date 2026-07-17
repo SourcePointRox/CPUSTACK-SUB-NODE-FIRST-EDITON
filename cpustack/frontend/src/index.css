@@ -48,9 +48,20 @@ a {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.page-toolbar h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  background: linear-gradient(90deg, #1668dc 0%, #722ed1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 /* 状态点 */
@@ -63,21 +74,174 @@ a {
   vertical-align: middle;
 }
 
-/* 登录页背景 */
+/* ===== 登录页 ===== */
 .login-wrapper {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #0f2a4d 0%, #1668dc 50%, #0a1f3c 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.login-wrapper::before {
+  content: '';
+  position: absolute;
+  top: -200px;
+  left: -200px;
+  width: 500px;
+  height: 500px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(114, 46, 209, 0.25) 0%, transparent 70%);
+  animation: float 8s ease-in-out infinite;
+}
+
+.login-wrapper::after {
+  content: '';
+  position: absolute;
+  bottom: -250px;
+  right: -250px;
+  width: 600px;
+  height: 600px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(22, 104, 220, 0.3) 0%, transparent 70%);
+  animation: float 10s ease-in-out infinite reverse;
+}
+
+@keyframes float {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(40px, 40px); }
 }
 
 .login-card {
-  width: 380px;
-  padding: 36px 32px;
-  background: rgba(255, 255, 255, 0.96);
+  width: 400px;
+  padding: 40px 36px;
+  background: rgba(255, 255, 255, 0.97);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  position: relative;
+  z-index: 1;
+}
+
+.login-logo {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1668dc 0%, #722ed1 100%);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(22, 104, 220, 0.35);
+}
+
+.login-logo svg,
+.login-logo img {
+  width: 36px;
+  height: 36px;
+  color: #fff;
+}
+
+/* ===== 仪表盘 ===== */
+.dashboard-hero {
+  background: linear-gradient(135deg, #1668dc 0%, #722ed1 100%);
+  border-radius: 16px;
+  padding: 28px 32px;
+  margin-bottom: 20px;
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(22, 104, 220, 0.25);
+}
+
+.dashboard-hero::before {
+  content: '';
+  position: absolute;
+  top: -50px;
+  right: -50px;
+  width: 200px;
+  height: 200px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.15) 0%, transparent 70%);
+  border-radius: 50%;
+}
+
+.dashboard-hero h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.dashboard-hero p {
+  margin: 0;
+  opacity: 0.9;
+  font-size: 14px;
+}
+
+.stat-card {
+  border-radius: 12px !important;
+  border: none !important;
+  overflow: hidden;
+  position: relative;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+}
+
+.stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+.stat-card .ant-card-body {
+  padding: 20px 22px !important;
+  position: relative;
+  z-index: 1;
+}
+
+.stat-card .stat-icon {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 44px;
+  height: 44px;
   border-radius: 12px;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.stat-card .stat-icon.cpu { background: linear-gradient(135deg, #1668dc, #4ea3ff); }
+.stat-card .stat-icon.mem { background: linear-gradient(135deg, #722ed1, #a855f7); }
+.stat-card .stat-icon.node { background: linear-gradient(135deg, #13c2c2, #36cfc9); }
+.stat-card .stat-icon.run { background: linear-gradient(135deg, #52c41a, #73d13d); }
+.stat-card .stat-icon.model { background: linear-gradient(135deg, #fa8c16, #ffa940); }
+
+.stat-card .ant-statistic-title {
+  font-size: 13px !important;
+  color: rgba(0, 0, 0, 0.55) !important;
+  margin-bottom: 8px !important;
+}
+
+.stat-card .ant-statistic-content-value {
+  font-size: 28px !important;
+  font-weight: 600 !important;
+  color: rgba(0, 0, 0, 0.88) !important;
+}
+
+.chart-card {
+  border-radius: 12px !important;
+  border: none !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06) !important;
+  overflow: hidden;
+}
+
+.chart-card .ant-card-body {
+  padding: 20px 24px !important;
 }
 
 /* 对话气泡 */
@@ -102,4 +266,30 @@ a {
   color: rgba(0, 0, 0, 0.85);
   align-self: flex-start;
   border-bottom-left-radius: 2px;
+}
+
+/* 暗色模式适配 */
+[data-theme="dark"] .stat-card,
+[data-theme="dark"] .chart-card {
+  background: #1f1f1f !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3) !important;
+}
+
+[data-theme="dark"] .stat-card:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4) !important;
+}
+
+[data-theme="dark"] .stat-card .ant-statistic-title {
+  color: rgba(255, 255, 255, 0.55) !important;
+}
+
+[data-theme="dark"] .stat-card .ant-statistic-content-value {
+  color: rgba(255, 255, 255, 0.88) !important;
+}
+
+[data-theme="dark"] .page-toolbar h2 {
+  background: linear-gradient(90deg, #4ea3ff 0%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }

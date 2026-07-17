@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Button, Card, Form, Input, Typography } from 'antd';
-import { LockOutlined, UserOutlined } from '@ant-design/icons';
+import { LockOutlined, UserOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
 import type { LoginPayload } from '../services/types';
@@ -27,7 +27,10 @@ const Login: React.FC = () => {
   return (
     <div className="login-wrapper">
       <Card className="login-card" bordered={false}>
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+        <div className="login-logo">
+          <ThunderboltOutlined />
+        </div>
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <Title level={3} style={{ marginBottom: 4 }}>
             CPUSTACK 控制台
           </Title>
@@ -68,12 +71,13 @@ const Login: React.FC = () => {
               size="large"
               block
               loading={loading}
+              style={{ height: 44, borderRadius: 8, fontWeight: 500 }}
             >
               登录
             </Button>
           </Form.Item>
         </Form>
-        <div style={{ marginTop: 16, textAlign: 'center' }}>
+        <div style={{ marginTop: 20, textAlign: 'center' }}>
           <Text type="secondary" style={{ fontSize: 12 }}>
             调用接口：POST /v2/auth/login
           </Text>
