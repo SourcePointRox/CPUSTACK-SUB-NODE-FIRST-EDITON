@@ -20,15 +20,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_lan_ip() -> str:
+    """获取本机局域网 IP（用于构造子节点可回连的地址）。
+
+    通过 UDP 连接探测默认路由出口 IP，无需真正发送数据。失败回退 127.0.0.1。
+    """
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
 def _external_server_url() -> str:
     """计算主节点外部可达 URL。
 
-    settings.host 为 0.0.0.0 时不可被外部访问，回退到 server_url 配置；
-    否则用 host:port 构造。
+    settings.server_url 可能被配置为 loopback（127.0.0.1/localhost）或端口与实际
+    监听端口不符（如 CLI 用 --port 覆盖了配置端口），这些地址对子节点不可达。
+    检测到不可达配置时，用本机局域网 IP + 实际监听端口(settings.port)构造正确地址。
     """
-    if settings.host in ("0.0.0.0", "::"):
-        return settings.server_url
-    return f"http://{settings.host}:{settings.port}"
+    from urllib.parse import urlparse
+
+    configured = settings.server_url
+    try:
+        parsed = urlparse(configured)
+        cfg_host = (parsed.hostname or "").lower()
+        cfg_port = parsed.port
+    except Exception:
+        cfg_host, cfg_port = "", None
+
+    # host 不能是 loopback/通配，端口须与实际监听端口一致，否则对外不可达
+    unreachable_host = cfg_host in ("", "localhost", "127.0.0.1", "0.0.0.0", "::1", "::")
+    port_mismatch = cfg_port is not None and cfg_port != settings.port
+
+    if not unreachable_host and not port_mismatch:
+        return configured
+
+    lan_ip = _get_lan_ip()
+    return f"http://{lan_ip}:{settings.port}"
 
 
 class DiscoveredWorker(BaseModel):
@@ -214,17 +248,13 @@ async def adopt_discovered(
             message="子节点返回非 JSON 响应",
         )
 
-    if not data.get("ok"):
-        return AdoptResponse(
-            ok=False, ip=req.ip, port=req.port, name=name,
-            message=data.get("message", "子节点注册失败"),
-        )
-
-    # 等待心跳上报，确认节点已在数据库中就绪
+    sub_ok = data.get("ok")
     worker_id = data.get("worker_id")
     worker_uuid = data.get("worker_uuid")
 
-    # 轮询数据库确认（最多等 8 秒）
+    # 无论子节点返回 ok=True/False，都轮询数据库确认（最多 8 秒）
+    # 子节点可能因凭证持久化失败误报 ok=False，但实际注册已成功（内存凭证已赋值，
+    # 心跳正常上报）。以数据库实际状态为准，避免误报添加失败。
     confirmed = False
     for _ in range(8):
         await asyncio.sleep(1)
@@ -243,12 +273,32 @@ async def adopt_discovered(
         except Exception:
             logger.debug("确认节点注册状态时查询失败", exc_info=True)
 
+    if confirmed:
+        return AdoptResponse(
+            ok=True,
+            ip=req.ip,
+            port=req.port,
+            name=name,
+            worker_id=worker_id,
+            worker_uuid=worker_uuid,
+            message="已并入算力池",
+        )
+
+    # 数据库未确认，按子节点原始返回值响应
+    if sub_ok:
+        return AdoptResponse(
+            ok=True,
+            ip=req.ip,
+            port=req.port,
+            name=name,
+            worker_id=worker_id,
+            worker_uuid=worker_uuid,
+            message="注册成功，等待心跳上报中",
+        )
     return AdoptResponse(
-        ok=True,
+        ok=False,
         ip=req.ip,
         port=req.port,
         name=name,
-        worker_id=worker_id,
-        worker_uuid=worker_uuid,
-        message="已并入算力池" if confirmed else "注册成功，等待心跳上报中",
+        message=data.get("message", "子节点注册失败"),
     )

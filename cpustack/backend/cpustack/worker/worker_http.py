@@ -109,7 +109,9 @@ def create_worker_http_app(worker_manager: "WorkerManager") -> FastAPI:
             logger.exception("注册触发执行异常")
             ok = False
 
-        if ok:
+        # register() 可能因凭证持久化失败返回 False，但内存凭证已赋值（注册实际成功）
+        # 此时 worker_uuid 一定有值，主节点可据此在数据库中确认节点已注册
+        if ok or worker_manager.worker_uuid:
             return RegisterTriggerResponse(
                 ok=True,
                 worker_id=worker_manager.worker_id,

@@ -97,7 +97,7 @@ async def dashboard(
 
 
 @router.post("/worker-registration", response_model=WorkerRegisterResponse)
-async def register_worker(req: WorkerRegisterRequest, session=Depends(get_session)):
+async def register_worker(req: WorkerRegisterRequest, request: Request, session=Depends(get_session)):
     """Worker 注册端点（Token 握手）。
 
     验证集群 Token，生成 worker_uuid 和 Worker 专属 API Key。
@@ -106,12 +106,25 @@ async def register_worker(req: WorkerRegisterRequest, session=Depends(get_sessio
     if req.token != settings.worker_token and settings.worker_token:
         raise HTTPException(status_code=403, detail="无效的注册 Token")
 
+    # 用请求实际源 IP 覆盖子节点自报 IP
+    # 子节点可能因多网卡/代理 TUN 自报错误 IP（如 198.18.0.1），导致主节点无法回连
+    # 请求源 IP 一定是可达的（否则请求进不来）
+    actual_ip = req.ip
+    client_ip = request.client.host if request.client else None
+    if client_ip and not client_ip.startswith("127."):
+        actual_ip = client_ip
+    if actual_ip != req.ip:
+        logger.info(
+            "Worker %s 自报 IP=%s，实际请求源 IP=%s，使用实际源 IP",
+            req.name, req.ip, actual_ip,
+        )
+
     # 检查是否已注册
     stmt = select(Worker).where(Worker.name == req.name)
     existing = (await session.execute(stmt)).scalar_one_or_none()
     if existing:
         # 更新信息
-        existing.ip = req.ip
+        existing.ip = actual_ip
         existing.port = req.port
         existing.state = WorkerState.NOT_READY
         session.add(existing)
@@ -129,7 +142,7 @@ async def register_worker(req: WorkerRegisterRequest, session=Depends(get_sessio
         name=req.name,
         uuid=worker_uuid,
         api_key=api_key,
-        ip=req.ip,
+        ip=actual_ip,
         port=req.port,
         state=WorkerState.NOT_READY,
     )

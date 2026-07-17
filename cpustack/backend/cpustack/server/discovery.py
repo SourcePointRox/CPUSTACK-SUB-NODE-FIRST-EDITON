@@ -120,7 +120,13 @@ async def scan_lan_workers(timeout: int | None = None) -> list[dict[str, Any]]:
             if msg.get("type") != f"{DISCOVERY_MAGIC}_response":
                 continue
 
-            ip = msg.get("ip") or addr[0]
+            # 优先用 UDP 包实际源地址（一定可达），子节点自报 IP 可能因多网卡/代理 TUN 而错误
+            src_ip = addr[0]
+            reported_ip = msg.get("ip")
+            if src_ip and not src_ip.startswith("127."):
+                ip = src_ip
+            else:
+                ip = reported_ip or src_ip or ""
             port = int(msg.get("port") or msg.get("worker_port") or 30080)
             key = (ip, port)
             if key in discovered:

@@ -530,7 +530,12 @@ async def _check_worker_heartbeats() -> None:
 
             for w in workers:
                 if w.heartbeat_at:
-                    age = (now - w.heartbeat_at).total_seconds()
+                    # SQLite 不保留时区信息，heartbeat_at 可能是 naive；
+                    # 统一补成 aware(UTC) 再与 now(UTC) 相减，避免 naive/aware 混用报错
+                    hb = w.heartbeat_at
+                    if hb.tzinfo is None:
+                        hb = hb.replace(tzinfo=timezone.utc)
+                    age = (now - hb).total_seconds()
                     if age > timeout:
                         w.state = WorkerState.UNREACHABLE
                         session.add(w)

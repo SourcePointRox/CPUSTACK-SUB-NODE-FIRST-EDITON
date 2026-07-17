@@ -101,8 +101,12 @@ class WorkerManager:
                 self._api_key = data["api_key"]
                 self._worker_id = data["worker_id"]
 
-                # 持久化凭证（后续重启可复用）
-                self._save_credentials()
+                # 持久化凭证（后续重启可复用）；失败不影响注册成功
+                # Windows 上 data_dir 可能不可写，但内存凭证已赋值，心跳可正常上报
+                try:
+                    self._save_credentials()
+                except Exception:
+                    logger.warning("保存 Worker 凭证失败，不影响注册", exc_info=True)
 
                 logger.info(
                     "Worker 注册成功: id=%d uuid=%s", self._worker_id, self._worker_uuid
@@ -219,12 +223,59 @@ class WorkerManager:
             await asyncio.sleep(interval)
 
     def _get_local_ip(self) -> str:
-        """获取本机局域网 IP。"""
+        """获取本机局域网 IP（过滤 loopback/link-local/代理 TUN 等虚拟网卡）。
+
+        多网卡环境下（如安装了 Clash/代理 TUN），默认路由出口可能指向虚拟网卡
+        (198.18.0.0/15)，导致上报的 IP 对局域网内其他节点不可达。
+        枚举所有网卡地址，优先返回真实局域网 IP。
+        """
+        candidates: list[str] = []
+
+        # 1. 用 psutil 枚举所有网卡 IPv4（最全面）
+        try:
+            import psutil
+
+            for _, addrs in psutil.net_if_addrs().items():
+                for a in addrs:
+                    if a.family == socket.AF_INET and a.address:
+                        if a.address not in candidates:
+                            candidates.append(a.address)
+        except Exception:
+            pass
+
+        # 2. 主机名解析
+        try:
+            for _, _, _, _, sockaddr in socket.getaddrinfo(
+                socket.gethostname(), None, socket.AF_INET
+            ):
+                ip = sockaddr[0]
+                if ip and ip not in candidates:
+                    candidates.append(ip)
+        except Exception:
+            pass
+
+        # 3. 默认路由出口 IP（可能因代理 TUN 返回虚拟 IP，作为兜底候选）
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             s.close()
-            return ip
+            if ip and ip not in candidates:
+                candidates.append(ip)
         except Exception:
-            return "127.0.0.1"
+            pass
+
+        def _is_real_lan(ip: str) -> bool:
+            if not ip:
+                return False
+            if ip.startswith(("127.", "169.254.", "0.")):
+                return False
+            # 198.18.0.0/15: IANA 保留网络基准测试段，常见于代理 TUN（Clash 等）
+            if ip.startswith("198.18.") or ip.startswith("198.19."):
+                return False
+            return True
+
+        for ip in candidates:
+            if _is_real_lan(ip):
+                return ip
+        return candidates[0] if candidates else "127.0.0.1"
