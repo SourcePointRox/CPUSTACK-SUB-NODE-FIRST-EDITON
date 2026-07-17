@@ -117,7 +117,7 @@ models:
     parameters: "32B"
     source_repo: huggingface
     source_model_id: "bartowski/Qwen_Qwen3-32B-GGUF"
-    source_filename: "Qwen3-32B-Q3_K_M.gguf"
+    source_filename: "Qwen_Qwen3-32B-Q3_K_M.gguf"
     quantization_size_gb: 15.97
     estimated_memory_mb: 15000
     required_instruction_sets: []

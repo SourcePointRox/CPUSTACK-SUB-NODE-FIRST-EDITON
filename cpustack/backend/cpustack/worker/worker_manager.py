@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+from datetime import datetime, timezone
 
 import httpx
 
@@ -30,6 +31,10 @@ class WorkerManager:
         # 动态覆盖：被主节点一键接管后，用覆盖值代替 settings 中的默认配置
         self._server_url_override: str | None = None
         self._token_override: str | None = None
+        # 心跳状态跟踪（供子节点状态页显示）
+        self._last_heartbeat_ok: bool = False
+        self._last_heartbeat_at: datetime | None = None
+        self._heartbeat_failures: int = 0
 
     @property
     def effective_server_url(self) -> str:
@@ -52,6 +57,21 @@ class WorkerManager:
     @property
     def worker_id(self) -> int | None:
         return self._worker_id
+
+    @property
+    def last_heartbeat_ok(self) -> bool:
+        """最近一次心跳是否成功。"""
+        return self._last_heartbeat_ok
+
+    @property
+    def last_heartbeat_at(self) -> datetime | None:
+        """最近一次心跳时间。"""
+        return self._last_heartbeat_at
+
+    @property
+    def heartbeat_failures(self) -> int:
+        """连续心跳失败次数。"""
+        return self._heartbeat_failures
 
     async def register(
         self,
@@ -195,8 +215,13 @@ class WorkerManager:
                 ok = await self.sync_status()
                 if ok:
                     consecutive_failures = 0
+                    self._last_heartbeat_ok = True
+                    self._last_heartbeat_at = datetime.now(timezone.utc)
+                    self._heartbeat_failures = 0
                 else:
                     consecutive_failures += 1
+                    self._last_heartbeat_ok = False
+                    self._heartbeat_failures = consecutive_failures
                     backoff = min(interval * (2 ** consecutive_failures), max_backoff)
                     logger.warning(
                         "心跳失败（连续 %d 次），%ds 后重试",

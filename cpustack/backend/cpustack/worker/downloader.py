@@ -16,13 +16,25 @@ from typing import Callable
 
 from cpustack.config import settings
 
+# 关键：在任何 huggingface_hub 导入之前设置 HF_ENDPOINT 环境变量。
+# huggingface_hub 在模块导入时读取该常量（constants.ENDPOINT），
+# 若导入后才设置则不生效，会导致连接 huggingface.co 而非镜像站。
+if settings.huggingface_mirror:
+    os.environ["HF_ENDPOINT"] = settings.huggingface_mirror
+
 logger = logging.getLogger(__name__)
 
 
 def _setup_mirror() -> None:
-    """配置 HuggingFace 镜像。"""
+    """配置 HuggingFace 镜像（运行时补丁，防止 huggingface_hub 已被其他模块提前导入）。"""
     if settings.huggingface_mirror:
         os.environ["HF_ENDPOINT"] = settings.huggingface_mirror
+        # 若 huggingface_hub 已被导入，直接 patch 其常量
+        try:
+            import huggingface_hub.constants as hf_constants
+            hf_constants.ENDPOINT = settings.huggingface_mirror
+        except ImportError:
+            pass
         logger.info("使用 HuggingFace 镜像: %s", settings.huggingface_mirror)
 
 

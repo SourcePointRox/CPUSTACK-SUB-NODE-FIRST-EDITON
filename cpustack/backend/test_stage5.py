@@ -412,7 +412,7 @@ def test_model_catalog() -> None:
     check("10.1 YAML可解析", isinstance(data, dict) and "models" in data, f"keys={list(data.keys()) if isinstance(data, dict) else None}")
 
     models = data.get("models", [])
-    check("10.2 6个模型", len(models) == 6, f"count={len(models)}")
+    check("10.2 7个模型", len(models) == 7, f"count={len(models)}")
 
     required_fields = {"name", "display_name", "source_repo", "source_model_id",
                        "source_filename", "quantization_size_gb", "estimated_memory_mb",
@@ -422,9 +422,10 @@ def test_model_catalog() -> None:
         missing = required_fields - set(m.keys())
         check(f"10.3 字段完整({m.get('name', '?')})", not missing, f"missing={missing}")
 
-    # 10.4 全部 ≤5GB
-    all_under_5gb = all(m.get("quantization_size_gb", 999) <= 5.0 for m in models)
-    check("10.4 全部≤5GB", all_under_5gb, f"sizes={[m.get('quantization_size_gb') for m in models]}")
+    # 10.4 基准模型 ≤5GB（排除大型 RPC 分布式模型）
+    benchmark_models = [m for m in models if m.get("recommended_backend") != "llama_cpp_rpc"]
+    all_under_5gb = all(m.get("quantization_size_gb", 999) <= 5.0 for m in benchmark_models)
+    check("10.4 基准模型≤5GB", all_under_5gb, f"sizes={[m.get('quantization_size_gb') for m in benchmark_models]}")
 
     # 10.5 包含 RPC 推荐模型
     rpc_models = [m for m in models if m.get("recommended_backend") == "llama_cpp_rpc"]
