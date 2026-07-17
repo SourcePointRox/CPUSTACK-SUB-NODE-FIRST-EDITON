@@ -17,6 +17,7 @@ import {
   ReloadOutlined,
   RadarChartOutlined,
   CopyOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../services/api';
@@ -46,6 +47,7 @@ const Workers: React.FC = () => {
   const [scanning, setScanning] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredWorker[]>([]);
   const [registerResult, setRegisterResult] = useState<DiscoveryRegisterResult | null>(null);
+  const [adoptingIp, setAdoptingIp] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -98,6 +100,25 @@ const Workers: React.FC = () => {
       fetchData();
     } catch {
       // ignore
+    }
+  };
+
+  const handleAdopt = async (dw: DiscoveredWorker) => {
+    setAdoptingIp(`${dw.ip}:${dw.port}`);
+    try {
+      const result = await api.adoptWorker(dw.ip, dw.port, dw.name);
+      if (result.ok) {
+        message.success(`节点 ${dw.ip} ${result.message}`);
+        // 立即刷新扫描列表和节点列表
+        await handleScan();
+        fetchData();
+      } else {
+        message.error(`添加失败：${result.message}`);
+      }
+    } catch {
+      // 错误已在拦截器提示
+    } finally {
+      setAdoptingIp(null);
     }
   };
 
@@ -209,19 +230,29 @@ const Workers: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 160,
       render: (_, r) =>
         r.registered ? (
-          <Text type="secondary">-</Text>
+          <Tag color="green">已在算力池</Tag>
         ) : (
-          <Button
-            type="link"
-            size="small"
-            icon={<RadarChartOutlined />}
-            onClick={() => handleRegisterDiscovered(r)}
-          >
-            生成注册命令
-          </Button>
+          <Space size={4}>
+            <Button
+              type="primary"
+              size="small"
+              icon={<PlusOutlined />}
+              loading={adoptingIp === `${r.ip}:${r.port}`}
+              onClick={() => handleAdopt(r)}
+            >
+              一键添加
+            </Button>
+            <Tooltip title="生成手动注册命令（备用）">
+              <Button
+                size="small"
+                icon={<CopyOutlined />}
+                onClick={() => handleRegisterDiscovered(r)}
+              />
+            </Tooltip>
+          </Space>
         ),
     },
   ];
@@ -251,8 +282,8 @@ const Workers: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="局域网自动发现"
-        description="Worker 节点启动后会监听 UDP 30090 端口响应 Server 的广播探测。点击「扫描局域网」可发现同网段内所有运行中的 CPUSTACK Worker，并生成注册引导命令。"
+        message="局域网自动发现 + 一键添加"
+        description="Worker 节点启动后会监听 UDP 30090 端口响应主节点扫描。点击「扫描局域网」发现节点后，点击「一键添加」即可自动接管注册并入算力池，无需在子节点手动执行命令。"
       />
 
       <Table<Worker>
@@ -289,8 +320,8 @@ const Workers: React.FC = () => {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="CPUSTACK Worker 为主动注册模型"
-          description="在目标节点执行下方命令即可完成注册（命令在点击「生成注册命令」后显示）。"
+          message="一键添加子节点"
+          description="发现未注册节点后，点击「一键添加」按钮，主节点会主动推送注册指令，子节点自动注册并入算力池。无需手动执行命令。"
         />
         <Table<DiscoveredWorker>
           rowKey={(r) => `${r.ip}:${r.port}`}

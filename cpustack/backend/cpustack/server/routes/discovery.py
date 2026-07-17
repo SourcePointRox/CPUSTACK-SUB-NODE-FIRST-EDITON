@@ -1,19 +1,34 @@
-"""局域网发现路由：扫描子节点 + 一键注册。"""
+"""局域网发现路由：扫描子节点 + 一键添加（接管注册）。"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlmodel import select
 
 from cpustack.config import settings
-from cpustack.db import get_session
+from cpustack.db import get_session, session_scope
 from cpustack.schemas.users import User
+from cpustack.schemas.workers import Worker
 from cpustack.server.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _external_server_url() -> str:
+    """计算主节点外部可达 URL。
+
+    settings.host 为 0.0.0.0 时不可被外部访问，回退到 server_url 配置；
+    否则用 host:port 构造。
+    """
+    if settings.host in ("0.0.0.0", "::"):
+        return settings.server_url
+    return f"http://{settings.host}:{settings.port}"
 
 
 class DiscoveredWorker(BaseModel):
@@ -99,18 +114,12 @@ async def register_discovered(
     req: RegisterDiscoveredRequest,
     user: User = Depends(get_current_user),
 ):
-    """为已发现的 Worker 生成注册引导命令。
+    """为已发现的 Worker 生成注册引导命令（向后兼容）。
 
-    CPUSTACK 的 Worker 是主动注册模型（Worker 调用 Server 的
-    /v2/worker-registration），因此此端点返回在目标节点上执行的命令，
-    用户在目标节点运行该命令即可完成注册。
+    推荐使用 POST /v2/discovery/adopt 实现一键添加，无需在子节点手动执行命令。
     """
     name = req.name or f"worker-{req.ip.replace('.', '-')}"
-    # 修正 server_url：host 为 0.0.0.0 时不可被外部访问，回退到 server_url 配置
-    if settings.host in ("0.0.0.0", "::"):
-        external_url = settings.server_url
-    else:
-        external_url = f"http://{settings.host}:{settings.port}"
+    external_url = _external_server_url()
 
     command = (
         f"set CPUSTACK_SERVER_URL={external_url} && "
@@ -127,4 +136,119 @@ async def register_discovered(
         server_url=external_url,
         worker_token=settings.worker_token,
         command=command,
+    )
+
+
+class AdoptRequest(BaseModel):
+    """一键添加已发现 Worker 的请求。"""
+
+    ip: str
+    port: int = 30080
+    name: str | None = None  # 可选自定义名称
+
+
+class AdoptResponse(BaseModel):
+    """一键添加结果。"""
+
+    ok: bool
+    ip: str
+    port: int
+    name: str
+    worker_id: int | None = None
+    worker_uuid: str | None = None
+    message: str = ""
+
+
+@router.post("/adopt", response_model=AdoptResponse)
+async def adopt_discovered(
+    req: AdoptRequest,
+    user: User = Depends(get_current_user),
+):
+    """一键添加已发现的子节点：主节点主动推送注册指令，子节点自动注册并入算力池。
+
+    流程：
+    1. 主节点调用子节点 POST http://{ip}:{port}/internal/register
+    2. 子节点用推送的 server_url + token 重新注册到主节点
+    3. 注册成功后子节点自动心跳上报，并入算力池
+
+    无需在子节点手动执行任何命令。
+    """
+    name = req.name or f"worker-{req.ip.replace('.', '-')}"
+    external_url = _external_server_url()
+    target = f"http://{req.ip}:{req.port}/internal/register"
+
+    logger.info("一键添加子节点 %s:%d -> %s", req.ip, req.port, target)
+
+    try:
+        async with httpx.AsyncClient(timeout=40) as client:
+            resp = await client.post(
+                target,
+                json={
+                    "server_url": external_url,
+                    "worker_token": settings.worker_token,
+                    "name": name,
+                },
+            )
+    except httpx.ConnectError:
+        return AdoptResponse(
+            ok=False, ip=req.ip, port=req.port, name=name,
+            message=f"无法连接子节点 {req.ip}:{req.port}，请确认子节点 Worker 进程已启动",
+        )
+    except httpx.TimeoutException:
+        return AdoptResponse(
+            ok=False, ip=req.ip, port=req.port, name=name,
+            message=f"连接子节点超时，请检查网络或防火墙（端口 {req.port}）",
+        )
+
+    if resp.status_code != 200:
+        return AdoptResponse(
+            ok=False, ip=req.ip, port=req.port, name=name,
+            message=f"子节点响应异常: HTTP {resp.status_code}",
+        )
+
+    try:
+        data = resp.json()
+    except Exception:
+        return AdoptResponse(
+            ok=False, ip=req.ip, port=req.port, name=name,
+            message="子节点返回非 JSON 响应",
+        )
+
+    if not data.get("ok"):
+        return AdoptResponse(
+            ok=False, ip=req.ip, port=req.port, name=name,
+            message=data.get("message", "子节点注册失败"),
+        )
+
+    # 等待心跳上报，确认节点已在数据库中就绪
+    worker_id = data.get("worker_id")
+    worker_uuid = data.get("worker_uuid")
+
+    # 轮询数据库确认（最多等 8 秒）
+    confirmed = False
+    for _ in range(8):
+        await asyncio.sleep(1)
+        try:
+            async with session_scope() as session:
+                if worker_uuid:
+                    stmt = select(Worker).where(Worker.uuid == worker_uuid)
+                else:
+                    stmt = select(Worker).where(Worker.ip == req.ip)
+                w = (await session.execute(stmt)).scalar_one_or_none()
+                if w and w.heartbeat_at is not None:
+                    confirmed = True
+                    worker_id = w.id
+                    worker_uuid = w.uuid
+                    break
+        except Exception:
+            logger.debug("确认节点注册状态时查询失败", exc_info=True)
+
+    return AdoptResponse(
+        ok=True,
+        ip=req.ip,
+        port=req.port,
+        name=name,
+        worker_id=worker_id,
+        worker_uuid=worker_uuid,
+        message="已并入算力池" if confirmed else "注册成功，等待心跳上报中",
     )

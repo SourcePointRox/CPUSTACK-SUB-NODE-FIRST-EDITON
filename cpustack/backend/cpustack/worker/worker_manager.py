@@ -27,6 +27,19 @@ class WorkerManager:
         self._worker_id: int | None = None
         self._registered_ip: str | None = None  # 注册到 Server 时上报的 IP
         self._heartbeat_task: asyncio.Task | None = None
+        # 动态覆盖：被主节点一键接管后，用覆盖值代替 settings 中的默认配置
+        self._server_url_override: str | None = None
+        self._token_override: str | None = None
+
+    @property
+    def effective_server_url(self) -> str:
+        """当前生效的主节点地址（覆盖值优先）。"""
+        return self._server_url_override or settings.server_url
+
+    @property
+    def effective_token(self) -> str:
+        """当前生效的集群 token（覆盖值优先）。"""
+        return self._token_override or settings.worker_token
 
     @property
     def worker_uuid(self) -> str | None:
@@ -40,21 +53,41 @@ class WorkerManager:
     def worker_id(self) -> int | None:
         return self._worker_id
 
-    async def register(self) -> bool:
-        """向 Server 注册。"""
+    async def register(
+        self,
+        server_url_override: str | None = None,
+        token_override: str | None = None,
+    ) -> bool:
+        """向 Server 注册。
+
+        Args:
+            server_url_override: 主节点地址覆盖（一键接管时由主节点推送）
+            token_override: 集群 token 覆盖
+        """
+        # 记录覆盖值，后续心跳也使用
+        if server_url_override:
+            self._server_url_override = server_url_override
+        if token_override:
+            self._token_override = token_override
+
+        server_url = self.effective_server_url
+        token = self.effective_token
         worker_name = settings.worker_name or socket.gethostname()
         local_ip = self._get_local_ip()
         self._registered_ip = local_ip
 
-        logger.info("Worker 注册中: %s (%s:%d)", worker_name, local_ip, settings.worker_port)
+        logger.info(
+            "Worker 注册中: %s (%s:%d) -> %s",
+            worker_name, local_ip, settings.worker_port, server_url,
+        )
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
-                    f"{settings.server_url}/v2/worker-registration",
+                    f"{server_url}/v2/worker-registration",
                     json={
                         "name": worker_name,
-                        "token": settings.worker_token,
+                        "token": token,
                         "ip": local_ip,
                         "port": settings.worker_port,
                     },
@@ -128,7 +161,7 @@ class WorkerManager:
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
-                    f"{settings.server_url}/v2/worker-sync",
+                    f"{self.effective_server_url}/v2/worker-sync",
                     json={
                         "worker_uuid": self._worker_uuid,
                         "api_key": self._api_key,

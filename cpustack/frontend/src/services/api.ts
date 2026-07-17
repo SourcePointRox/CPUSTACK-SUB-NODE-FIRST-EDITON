@@ -3,6 +3,7 @@ import { message } from 'antd';
 import type {
   APIKey,
   APIKeyCreatePayload,
+  AdoptWorkerResult,
   CatalogResponse,
   DashboardStats,
   DiscoveryRegisterResult,
@@ -208,6 +209,9 @@ export const api = {
     name?: string,
   ): Promise<DiscoveryRegisterResult> {
     return request.post('/v2/discovery/register', { ip, port, name });
+  },
+  adoptWorker(ip: string, port: number, name?: string): Promise<AdoptWorkerResult> {
+    return request.post('/v2/discovery/adopt', { ip, port, name }, { timeout: 60000 });
   },
 
   /* Token 用量 */

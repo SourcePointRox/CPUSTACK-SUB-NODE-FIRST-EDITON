@@ -16,6 +16,7 @@ import logging
 from cpustack.config import settings
 from cpustack.worker.discovery_listener import DiscoveryListener
 from cpustack.worker.serve_manager import ServeManager
+from cpustack.worker.worker_http import start_worker_http
 from cpustack.worker.worker_manager import WorkerManager
 
 logger = logging.getLogger(__name__)
@@ -29,17 +30,26 @@ class Worker:
         self.serve_manager = ServeManager(self.worker_manager)
         self.discovery_listener = DiscoveryListener(self.worker_manager)
         self._running = False
+        self._http_task: asyncio.Task | None = None
+        self._watch_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """启动 Worker。"""
         logger.info("CPUSTACK Worker 启动中...")
 
+        # 0. 启动内部 HTTP 服务（支持主节点一键接管注册）
+        #    即使初始注册失败，主节点扫描发现后也能通过 /internal/register 触发注册
+        self._http_task = await start_worker_http(self.worker_manager)
+
         # 1. 注册（优先加载已保存凭证）
         if not self.worker_manager._load_credentials():
             registered = await self.worker_manager.register()
             if not registered:
-                logger.error("Worker 注册失败，退出")
-                return
+                logger.warning(
+                    "Worker 初始注册失败，但内部 HTTP 服务已启动，"
+                    "可等待主节点通过「一键添加」接管注册"
+                )
+            # 注册失败不退出：保留进程，等待主节点一键接管
         else:
             logger.info("使用已保存的凭证: uuid=%s", self.worker_manager.worker_uuid)
             # 凭证存在但 Server 可能已重启丢失记录，立即尝试同步一次
@@ -55,7 +65,7 @@ class Worker:
         await self.worker_manager.start_heartbeat(interval=15)
 
         # 4. 启动实例监听
-        watch_task = asyncio.create_task(self.serve_manager.watch_instances())
+        self._watch_task = asyncio.create_task(self.serve_manager.watch_instances())
 
         # 5. 启动局域网发现监听（被动响应 Server 扫描）
         await self.discovery_listener.start()
@@ -78,6 +88,20 @@ class Worker:
         self._running = False
         # 停止发现监听
         await self.discovery_listener.stop()
+        # 停止内部 HTTP 服务
+        if self._http_task and not self._http_task.done():
+            self._http_task.cancel()
+            try:
+                await self._http_task
+            except asyncio.CancelledError:
+                pass
+        # 停止实例监听
+        if self._watch_task and not self._watch_task.done():
+            self._watch_task.cancel()
+            try:
+                await self._watch_task
+            except asyncio.CancelledError:
+                pass
         # 停止所有推理进程
         for instance_id in list(self.serve_manager._processes.keys()):
             await self.serve_manager.stop_instance(instance_id)

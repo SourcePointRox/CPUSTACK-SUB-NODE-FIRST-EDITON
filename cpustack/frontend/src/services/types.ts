@@ -192,6 +192,16 @@ export interface DiscoveryRegisterResult {
   command: string;
 }
 
+export interface AdoptWorkerResult {
+  ok: boolean;
+  ip: string;
+  port: number;
+  name: string;
+  worker_id?: number | null;
+  worker_uuid?: string | null;
+  message: string;
+}
+
 /* ---------- Token 用量 ---------- */
 export interface TokenDailyPoint {
   date: string;

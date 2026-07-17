@@ -96,7 +96,10 @@ async def _schedule_rpc_instance(
     # 按可用内存降序
     eligible.sort(key=lambda x: x[1].memory_available, reverse=True)
 
-    memory_needed = model.estimated_memory + 512  # 512MB 预留
+    # 内存预估：大型模型 KV cache + 激活开销更大，按 20% 预留（最少 512MB）
+    memory_needed = model.estimated_memory + max(
+        512, int(model.estimated_memory * 0.20)
+    )
 
     # 检查单节点是否足够
     if eligible[0][1].memory_available >= memory_needed:
@@ -122,12 +125,20 @@ async def _schedule_rpc_instance(
         return True
 
     # 多节点聚合：Master + Slaves
+    # Slave 数量上限 8（过多节点会导致 RPC 通信开销过大，反而降低吞吐）
+    MAX_RPC_SLAVES = 8
     master_w, master_s = eligible[0]
     slaves: list[tuple[Worker, WorkerStatus]] = []
     total_memory = master_s.memory_available
 
     for w, s in eligible[1:]:
         if total_memory >= memory_needed:
+            break
+        if len(slaves) >= MAX_RPC_SLAVES:
+            logger.warning(
+                "RPC 实例 %s 已达 Slave 上限 %d，停止聚合",
+                instance.name, MAX_RPC_SLAVES,
+            )
             break
         slaves.append((w, s))
         total_memory += s.memory_available
@@ -303,6 +314,75 @@ async def _schedule_prima_instance(
     return True
 
 
+async def _try_upgrade_to_rpc(
+    instance: ModelInstance,
+    model: Model,
+    workers: list[tuple[Worker, WorkerStatus]],
+    session,
+) -> bool:
+    """大模型自动降级：单机/数据并行内存不足时，升级到 RPC 内存池化。
+
+    触发条件：
+    1. 模型后端为 standalone 或 data_parallel
+    2. 存在 READY 节点满足指令集要求（说明失败原因是内存而非指令集）
+    3. 集群 READY 节点总可用内存 >= 模型内存 + 预留（RPC 聚合可装下）
+
+    降级操作：将 model.backend 改为 llama_cpp_rpc 并重新调度。
+    """
+    # 仅对单机/数据并行后端尝试降级
+    if model.backend not in (ModelBackend.LLAMA_CPP_STANDALONE, ModelBackend.DATA_PARALLEL):
+        return False
+
+    required_sets = _parse_instruction_sets(model.required_instruction_sets)
+
+    # 筛选满足指令集要求的 READY 节点
+    eligible = [
+        (w, s)
+        for w, s in workers
+        if w.state == WorkerState.READY
+        and required_sets.issubset(_parse_instruction_sets(s.instruction_sets))
+    ]
+
+    if not eligible:
+        # 指令集都不满足，无法降级
+        return False
+
+    # 计算集群总可用内存
+    total_available = sum(s.memory_available for _, s in eligible)
+    memory_needed = model.estimated_memory + max(
+        512, int(model.estimated_memory * 0.20)
+    )
+
+    if total_available < memory_needed:
+        # 即使聚合也装不下，无法降级
+        instance.state = ModelInstanceState.PENDING
+        instance.error_message = (
+            f"集群总内存不足: 模型需 {memory_needed}MB，"
+            f"集群可用 {total_available}MB（共 {len(eligible)} 节点）。"
+            f"建议增加节点或使用更小量化的模型。"
+        )
+        session.add(instance)
+        await session.commit()
+        logger.warning(
+            "实例 %s 集群内存不足: 需 %dMB, 可用 %dMB",
+            instance.name, memory_needed, total_available,
+        )
+        return True  # 已处理（设置错误信息），返回 True 停止后续调度
+
+    # 满足降级条件：升级到 RPC
+    logger.info(
+        "实例 %s 自动降级: %s -> llama_cpp_rpc (单机内存不足，集群可用 %dMB)",
+        instance.name, model.backend.value, total_available,
+    )
+    model.backend = ModelBackend.LLAMA_CPP_RPC
+    session.add(model)
+    await session.commit()
+
+    # 用 RPC 调度
+    await _schedule_rpc_instance(instance, model, workers, session)
+    return True
+
+
 def _parse_json(raw: str | None, default):
     """解析 JSON 字符串，失败返回默认值。"""
     if not raw:
@@ -358,6 +438,9 @@ async def _schedule_instance(instance_id: int) -> None:
         candidates = await _filter_chain.apply(model, instance, worker_list)
 
         if not candidates:
+            # 大模型自动降级：单机/数据并行内存不足时，尝试升级到 RPC 池化
+            if await _try_upgrade_to_rpc(instance, model, worker_list, session):
+                return
             instance.state = ModelInstanceState.PENDING
             instance.error_message = "无满足条件的节点（指令集或内存不匹配）"
             session.add(instance)
